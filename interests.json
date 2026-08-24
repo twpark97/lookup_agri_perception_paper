@@ -1,0 +1,26 @@
+{
+  "profile": "Indoor agricultural robotics researcher developing Mantis-Eye, a data lifecycle framework for repeated robotic phenotyping and farm inspection.",
+  "high_priority_topics": [
+    "indoor farm robotics and robotic phenotyping",
+    "agricultural drone monitoring and viewpoint planning",
+    "3D Gaussian splatting for robotics and agricultural scenes",
+    "LiDAR-camera calibration, localization, and semantic mapping",
+    "multi-object tracking and object-centered databases for repeated inspection",
+    "agricultural manipulation, world models, reinforcement learning, and sim-to-real"
+  ],
+  "arxiv_queries": [
+    "(cat:cs.RO OR cat:cs.CV) AND (agricultur* OR farm OR greenhouse OR phenotyping)",
+    "(cat:cs.RO OR cat:cs.CV) AND (drone OR UAV) AND (viewpoint OR inspection OR mapping)",
+    "(cat:cs.RO OR cat:cs.CV) AND (Gaussian splatting OR 3DGS) AND (robot* OR mapping)",
+    "cat:cs.RO AND (LiDAR camera calibration OR semantic mapping OR object tracking)",
+    "cat:cs.RO AND (world model OR reinforcement learning) AND (manipulation OR robot*)"
+  ],
+  "openalex_searches": [
+    "indoor farm robotics phenotyping",
+    "agricultural drone viewpoint planning inspection",
+    "3D Gaussian splatting robotics mapping",
+    "LiDAR camera calibration semantic mapping",
+    "agricultural manipulation world model reinforcement learning"
+  ]
+}
+
