@@ -1,0 +1,47 @@
+name: Daily paper recommendations
+
+on:
+  schedule:
+    # 08:00 KST (23:00 UTC on the previous day)
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-paper-recommendations
+  cancel-in-progress: false
+
+jobs:
+  recommend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SLACK_TOKEN1: ${{ secrets.SLACK_TOKEN1 }}
+      SLACK_SUMMARY_CHANNEL_ID1: ${{ secrets.SLACK_SUMMARY_CHANNEL_ID1 }}
+      SLACK_TOKEN2: ${{ secrets.SLACK_TOKEN2 }}
+      SLACK_SUMMARY_CHANNEL_ID2: ${{ secrets.SLACK_SUMMARY_CHANNEL_ID2 }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q
+      - run: python -m paper_bot.main
+
+      - name: Save recommendation history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          git diff --cached --quiet || git commit -m "chore: update recommendation history"
+          git push
