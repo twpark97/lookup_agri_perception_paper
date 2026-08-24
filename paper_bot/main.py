@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,8 @@ class Paper:
   pdf_url: str | None
   doi: str | None
   source: str
+  venue: str | None = None
+  publisher: str | None = None
 
 
 def required_env(name: str) -> str:
@@ -41,6 +44,12 @@ def required_env(name: str) -> str:
 
 def normalize_title(title: str) -> str:
   return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+
+
+def normalize_name(name: str | None) -> str:
+  if not name:
+    return ""
+  return re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
 
 
 def paper_key(paper: Paper) -> str:
@@ -111,8 +120,10 @@ def fetch_arxiv(queries: list[str], max_per_query: int = 30) -> list[Paper]:
 
 def fetch_openalex(searches: list[str], max_per_query: int = 40) -> list[Paper]:
   papers: list[Paper] = []
-  since = (datetime.now(timezone.utc) - timedelta(days=4)).date().isoformat()
-  for search in searches:
+  since = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+  for index, search in enumerate(searches):
+    if index:
+      time.sleep(1)
     response = requests.get(
       OPENALEX_API,
       params={
@@ -131,6 +142,7 @@ def fetch_openalex(searches: list[str], max_per_query: int = 40) -> list[Paper]:
         raise ValueError("OpenAlex returned a work without a title")
       primary = work.get("primary_location") or {}
       best = work.get("best_oa_location") or {}
+      venue_source = primary.get("source") or {}
       url = primary.get("landing_page_url") or work["id"]
       papers.append(
         Paper(
@@ -145,6 +157,8 @@ def fetch_openalex(searches: list[str], max_per_query: int = 40) -> list[Paper]:
           pdf_url=best.get("pdf_url"),
           doi=work.get("doi"),
           source="OpenAlex",
+          venue=venue_source.get("display_name"),
+          publisher=venue_source.get("host_organization_name"),
         )
       )
   return papers
@@ -161,6 +175,59 @@ def deduplicate(papers: list[Paper]) -> list[Paper]:
     unique[key] = paper
     titles.add(normalized)
   return list(unique.values())
+
+
+def paper_category(paper: Paper, policy: dict[str, Any]) -> str | None:
+  if paper.source == "arXiv":
+    return "other"
+
+  publisher = normalize_name(paper.publisher)
+  blocked_publishers = {
+    normalize_name(name) for name in policy["blocked_publishers"]
+  }
+  if publisher in blocked_publishers:
+    return None
+
+  venue = normalize_name(paper.venue)
+  robot_journals = {
+    normalize_name(name) for name in policy["robot_journals"]
+  }
+  phenotyping_journals = {
+    normalize_name(name) for name in policy["phenotyping_journals"]
+  }
+  other_journals = {
+    normalize_name(name) for name in policy["other_q1_q2_journals"]
+  }
+  if venue in robot_journals:
+    return "robot"
+  if venue in phenotyping_journals:
+    return "phenotyping"
+  if venue in other_journals:
+    return "other"
+  return None
+
+
+def select_quota(
+  ranking: list[dict[str, Any]],
+  papers: list[Paper],
+  policy: dict[str, Any],
+) -> list[dict[str, Any]]:
+  by_key = {paper_key(paper): paper for paper in papers}
+  quotas = {"robot": 2, "phenotyping": 1, "other": 1}
+  selected: list[dict[str, Any]] = []
+  for category, quota in quotas.items():
+    matches = [
+      item
+      for item in ranking
+      if paper_category(by_key[item["key"]], policy) == category
+    ]
+    if len(matches) < quota:
+      raise RuntimeError(
+        f"Only {len(matches)} eligible {category} papers were collected; "
+        f"required {quota}"
+      )
+    selected.extend({**item, "category": category} for item in matches[:quota])
+  return selected
 
 
 def json_response(client: OpenAI, model: str, prompt: str, schema: dict[str, Any]) -> Any:
@@ -187,6 +254,7 @@ def rank_papers(client: OpenAI, profile: dict[str, Any], papers: list[Paper]) ->
       "abstract": paper.abstract[:2500],
       "published": paper.published,
       "source": paper.source,
+      "venue": paper.venue,
     }
     for paper in papers
   ]
@@ -219,7 +287,7 @@ def rank_papers(client: OpenAI, profile: dict[str, Any], papers: list[Paper]) ->
   )
   result = json_response(
     client,
-    os.getenv("RANK_MODEL", "gpt-5.6-luna"),
+    os.getenv("RANK_MODEL", "gpt-4o-mini"),
     prompt,
     schema,
   )
@@ -234,16 +302,23 @@ def summarize_papers(
 ) -> list[dict[str, Any]]:
   by_key = {paper_key(paper): paper for paper in papers}
   shortlist = []
-  for rank in ranking[:12]:
+  for rank in ranking:
     paper = by_key[rank["key"]]
-    shortlist.append({**asdict(paper), "key": rank["key"], "rank_reason": rank["reason"]})
+    shortlist.append(
+      {
+        **asdict(paper),
+        "key": rank["key"],
+        "category": rank["category"],
+        "rank_reason": rank["reason"],
+      }
+    )
   schema = {
     "type": "object",
     "properties": {
       "recommendations": {
         "type": "array",
-        "minItems": 2,
-        "maxItems": 5,
+        "minItems": 4,
+        "maxItems": 4,
         "items": {
           "type": "object",
           "properties": {
@@ -262,7 +337,8 @@ def summarize_papers(
     "additionalProperties": False,
   }
   prompt = (
-    "Select 2 to 5 genuinely useful papers. Write compact Korean summaries. "
+    "Summarize all four supplied papers and return every input key exactly once. "
+    "Write compact Korean summaries. "
     "Do not exaggerate findings beyond the supplied abstract. application_ko must "
     "connect the paper to a specific part of the research profile.\n\n"
     f"PROFILE:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
@@ -270,7 +346,7 @@ def summarize_papers(
   )
   result = json_response(
     client,
-    os.getenv("SUMMARY_MODEL", "gpt-5.6-terra"),
+    os.getenv("SUMMARY_MODEL", "gpt-4o-mini"),
     prompt,
     schema,
   )
@@ -311,6 +387,7 @@ def send_slack(token: str, channel: str, text: str) -> None:
 
 def main() -> None:
   profile = json.loads((ROOT / "interests.json").read_text())
+  policy = json.loads((ROOT / "journal_policy.json").read_text())
   state_path = ROOT / "state" / "seen.json"
   state = json.loads(state_path.read_text())
 
@@ -319,13 +396,15 @@ def main() -> None:
     + fetch_openalex(profile["openalex_searches"])
   )
   unseen = [paper for paper in papers if paper_key(paper) not in state["papers"]]
-  if len(unseen) < 2:
-    raise RuntimeError(f"Only {len(unseen)} unseen papers were collected")
+  eligible = [paper for paper in unseen if paper_category(paper, policy)]
+  if len(eligible) < 4:
+    raise RuntimeError(f"Only {len(eligible)} eligible unseen papers were collected")
 
   client = OpenAI(api_key=required_env("OPENAI_API_KEY"))
-  ranking = rank_papers(client, profile, unseen)
-  recommendations = summarize_papers(client, profile, unseen, ranking)
-  message = format_slack(recommendations, unseen)
+  ranking = rank_papers(client, profile, eligible)
+  selected = select_quota(ranking, eligible, policy)
+  recommendations = summarize_papers(client, profile, eligible, selected)
+  message = format_slack(recommendations, eligible)
 
   send_slack(
     required_env("SLACK_TOKEN1"),
@@ -339,7 +418,7 @@ def main() -> None:
   )
 
   now = datetime.now(timezone.utc).isoformat()
-  by_key = {paper_key(paper): paper for paper in unseen}
+  by_key = {paper_key(paper): paper for paper in eligible}
   for item in recommendations:
     paper = by_key[item["key"]]
     state["papers"][item["key"]] = {
