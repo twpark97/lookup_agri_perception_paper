@@ -26,7 +26,7 @@ Repository `Settings → Secrets and variables → Actions`에 아래 Secret을 
 | `SLACK_TOKEN2` | 두 번째 Slack bot token |
 | `SLACK_SUMMARY_CHANNEL_ID2` | 두 번째 Slack channel ID |
 
-Slack bot에는 각 채널의 `chat:write` 권한이 필요하며, bot을 대상 채널에 초대해야 합니다. 채팅에 노출된 기존 토큰은 폐기하고 재발급한 토큰을 등록하세요.
+Slack bot에는 각 채널의 `chat:write` 권한이 필요하며, bot을 대상 채널에 초대해야 합니다.
 
 ## 실행
 
